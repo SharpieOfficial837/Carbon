@@ -1,11 +1,141 @@
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local Camera = workspace.CurrentCamera
+local CoreGui = game:GetService("CoreGui")
 local lp = Players.LocalPlayer
 
+local fontId = "rbxassetid://12187365364"
+local fontSize = 13
+local maxDist = 1000
+
+local storage = Instance.new("Folder")
+storage.Name = lp.Name
+if syn and syn.protect_gui then
+	syn.protect_gui(storage)
+	storage.Parent = CoreGui
+elseif getgui then
+	storage.Parent = getgui()
+else
+	storage.Parent = CoreGui
+end
+
+local cache = {}
+local showName, showTeam, showHealth = false, false, false
+
+local function hpColor(hum)
+	local pct = hum.Health / hum.MaxHealth
+	if pct >= 0.75 then return Color3.fromRGB(0, 255, 0)
+	elseif pct >= 0.35 then return Color3.fromRGB(255, 255, 0)
+	else return Color3.fromRGB(255, 0, 0) end
+end
+
+local function makeLabel(parent, order)
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(0, 0, 1, 0)
+	lbl.AutomaticSize = Enum.AutomaticSize.X
+	lbl.TextSize = fontSize
+	lbl.TextStrokeTransparency = 0
+	lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+	lbl.FontFace = Font.new(fontId, Enum.FontWeight.Bold)
+	lbl.LayoutOrder = order
+	lbl.Parent = parent
+	return lbl
+end
+
+local function removeESP(player)
+	if not cache[player] then return end
+	cache[player].gui:Destroy()
+	if cache[player].conn then cache[player].conn:Disconnect() end
+	cache[player] = nil
+end
+
+local function updateVisibility(player)
+	local e = cache[player]
+	if not e then return end
+	local any = showName or showTeam or showHealth
+	e.gui.Enabled = any
+	e.nameLabel.Visible = showName
+	e.teamLabel.Visible = showTeam
+	e.hpLabel.Visible = showHealth
+end
+
+local function applyESP(player, char)
+	local head = char:WaitForChild("Head", 5)
+	local hum = char:WaitForChild("Humanoid", 5)
+	if not head or not hum then return end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Adornee = head
+	bb.Size = UDim2.new(0, 200, 0, 22)
+	bb.StudsOffset = Vector3.new(0, 2.5, 0)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = maxDist
+	bb.ResetOnSpawn = false
+	bb.Enabled = false
+	bb.Parent = storage
+
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 100, 1, 0)
+	frame.Position = UDim2.new(0.5, 0, 0, 0)
+	frame.AnchorPoint = Vector2.new(0.5, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+	frame.BackgroundTransparency = 0.1
+	frame.BorderSizePixel = 0
+	frame.AutomaticSize = Enum.AutomaticSize.X
+	frame.Parent = bb
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 5)
+	corner.Parent = frame
+
+	local list = Instance.new("UIListLayout")
+	list.FillDirection = Enum.FillDirection.Horizontal
+	list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	list.VerticalAlignment = Enum.VerticalAlignment.Center
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	list.Padding = UDim.new(0, 3)
+	list.Parent = frame
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.Parent = frame
+
+	local nameLabel = makeLabel(frame, 1)
+	nameLabel.Text = player.Name
+	nameLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
+
+	local teamLabel = makeLabel(frame, 2)
+	local team = player.Team
+	teamLabel.Text = team and team.Name or "No Team"
+	teamLabel.TextColor3 = team and team.TeamColor.Color or Color3.fromRGB(200, 200, 200)
+
+	local hpLabel = makeLabel(frame, 3)
+	hpLabel.Text = math.round(hum.Health) .. "hp"
+	hpLabel.TextColor3 = hpColor(hum)
+
+	local conn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+		hpLabel.TextColor3 = hpColor(hum)
+		hpLabel.Text = math.round(hum.Health) .. "hp"
+	end)
+
+	cache[player] = { gui = bb, conn = conn, nameLabel = nameLabel, teamLabel = teamLabel, hpLabel = hpLabel }
+	updateVisibility(player)
+end
+
+local function addESP(player)
+	if player == lp then return end
+	removeESP(player)
+	if player.Character then task.spawn(applyESP, player, player.Character) end
+	player.CharacterAdded:Connect(function(char) task.spawn(applyESP, player, char) end)
+	player.CharacterRemoving:Connect(function() removeESP(player) end)
+end
+
+local function refreshAll()
+	for player in pairs(cache) do updateVisibility(player) end
+end
+
 return function(Tabs)
-	-- Guards
 	local GuardSection = Tabs.Main:AddLeftGroupbox('Guards')
 	local turretConns = {}
 	local turretAddedConn
@@ -38,99 +168,35 @@ return function(Tabs)
 		end
 	})
 
-	-- Visuals
-	local VisualsSection = Tabs.Main:AddRightGroupbox('Visuals')
-	local espObjects = {}
-	local espLoop, playerAddedConn, playerRemovingConn
-	local useTeamColor = false
+	local VisualsSection = Tabs.Main:AddRightGroupbox('Visual Features')
 
-	local function getTarget(char)
-		if not char then return nil end
-		return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
-	end
-
-	local function getLabel(player)
-		if player.DisplayName ~= "" and player.DisplayName ~= player.Name then
-			return ("%s (@%s)"):format(player.DisplayName, player.Name)
+	VisualsSection:AddToggle('ESPName', { Text = 'Name', Default = false, Callback = function(e)
+		showName = e
+		if e and next(cache) == nil then
+			for _, p in ipairs(Players:GetPlayers()) do addESP(p) end
+			Players.PlayerAdded:Connect(addESP)
+			Players.PlayerRemoving:Connect(removeESP)
 		end
-		return player.Name
-	end
+		refreshAll()
+	end})
 
-	local function getSize(dist)
-		if dist <= 300 then return 22 elseif dist <= 1200 then return 20 elseif dist <= 2500 then return 18 else return 17 end
-	end
-
-	local function getColor(player)
-		if useTeamColor and player.TeamColor then return player.TeamColor.Color end
-		return Color3.fromRGB(255, 255, 255)
-	end
-
-	local function getEdge(sp, depth, viewport)
-		local margin = 18
-		local center = Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
-		local offset = Vector2.new(sp.X - center.X, sp.Y - center.Y)
-		if depth <= 0 then offset = -offset end
-		if offset.Magnitude < 0.001 then offset = Vector2.new(0, -1) end
-		local scale = math.max(math.abs(offset.X) / math.max(1, center.X - margin), math.abs(offset.Y) / math.max(1, center.Y - margin), 1)
-		local pinned = center + (offset / scale)
-		return Vector2.new(math.clamp(pinned.X, margin, viewport.X - margin), math.clamp(pinned.Y, margin, viewport.Y - margin))
-	end
-
-	local function setVisible(e, s) e.main.Visible = s e.shadow.Visible = s end
-
-	local function createEntry(player)
-		if espObjects[player] then return espObjects[player] end
-		local function newText(color)
-			local t = Drawing.new("Text")
-			t.Center = true t.Outline = false t.Color = color t.Visible = false
-			return t
+	VisualsSection:AddToggle('ESPTeam', { Text = 'Team', Default = false, Callback = function(e)
+		showTeam = e
+		if e and next(cache) == nil then
+			for _, p in ipairs(Players:GetPlayers()) do addESP(p) end
+			Players.PlayerAdded:Connect(addESP)
+			Players.PlayerRemoving:Connect(removeESP)
 		end
-		espObjects[player] = { main = newText(Color3.fromRGB(255,255,255)), shadow = newText(Color3.new(0,0,0)) }
-		return espObjects[player]
-	end
+		refreshAll()
+	end})
 
-	local function removeEntry(player)
-		local e = espObjects[player]
-		if not e then return end
-		e.main:Remove() e.shadow:Remove() espObjects[player] = nil
-	end
-
-	local function update()
-		local camPos = Camera.CFrame.Position
-		local viewport = Camera.ViewportSize
-		for player in pairs(espObjects) do if not player.Parent then removeEntry(player) end end
-		for _, player in ipairs(Players:GetPlayers()) do
-			if player == lp then continue end
-			local e = createEntry(player)
-			local target = getTarget(player.Character)
-			if not target then setVisible(e, false) continue end
-			local worldPos = target.Position + Vector3.new(0, 2.7, 0)
-			local sp, onScreen = Camera:WorldToViewportPoint(worldPos)
-			local dist = (camPos - target.Position).Magnitude
-			local text = ("%s [%dm]"):format(getLabel(player), math.floor(dist + 0.5))
-			local size = getSize(dist)
-			local pos = (onScreen and sp.Z > 0) and Vector2.new(sp.X, sp.Y) or getEdge(sp, sp.Z, viewport)
-			e.main.Text = text e.main.Size = size e.main.Color = getColor(player) e.main.Position = pos
-			e.shadow.Text = text e.shadow.Size = size e.shadow.Position = pos + Vector2.new(1, 1)
-			setVisible(e, true)
+	VisualsSection:AddToggle('ESPHealth', { Text = 'Health', Default = false, Callback = function(e)
+		showHealth = e
+		if e and next(cache) == nil then
+			for _, p in ipairs(Players:GetPlayers()) do addESP(p) end
+			Players.PlayerAdded:Connect(addESP)
+			Players.PlayerRemoving:Connect(removeESP)
 		end
-	end
-
-	local function stopESP()
-		if espLoop then espLoop:Disconnect() espLoop = nil end
-		if playerAddedConn then playerAddedConn:Disconnect() playerAddedConn = nil end
-		if playerRemovingConn then playerRemovingConn:Disconnect() playerRemovingConn = nil end
-		for player in pairs(espObjects) do removeEntry(player) end
-	end
-
-	local function startESP()
-		stopESP()
-		for _, player in ipairs(Players:GetPlayers()) do if player ~= lp then createEntry(player) end end
-		playerAddedConn = Players.PlayerAdded:Connect(function(p) if p ~= lp then createEntry(p) end end)
-		playerRemovingConn = Players.PlayerRemoving:Connect(removeEntry)
-		espLoop = RunService.RenderStepped:Connect(update)
-	end
-
-	VisualsSection:AddToggle('NameESP', { Text = 'Name ESP', Default = false, Callback = function(e) if e then startESP() else stopESP() end end })
-	VisualsSection:AddToggle('NameESPTeamColor', { Text = 'Team Color', Default = false, Callback = function(e) useTeamColor = e end })
+		refreshAll()
+	end})
 end
