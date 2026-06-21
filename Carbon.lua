@@ -5,7 +5,4 @@ local function load(path)
 end
 
 local ui = load("ui/new.lua")
-local Tabs = ui.Tabs
-
-load("modules/606849621/guards.lua")(Tabs)
-load("modules/606849621/visuals.lua")(Tabs)
+load("modules/606849621/606849621.lua")(ui.Tabs)
